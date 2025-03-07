@@ -8,12 +8,15 @@ use aes_gcm::{
 use dotenv::dotenv;
 use std::env;
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 
 // Struktur untuk merepresentasikan catatan
 struct Note {
     id: i32,
     note: String,
     priority: String,
+    created_at: DateTime<Utc>,
+    modified_at: Option<DateTime<Utc>>,
 }
 
 // Fungsi untuk enkripsi data
@@ -46,7 +49,9 @@ fn init_db() -> anyhow::Result<Connection> {
         "CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             note BLOB NOT NULL,
-            priority BLOB NOT NULL
+            priority BLOB NOT NULL,
+            createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modifiedAt DATETIME
         )",
         [],
     ).context("Failed to create table")?;
@@ -77,16 +82,17 @@ fn add_note(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
 
     let encrypted_note = encrypt_data(note, key)?;
     let encrypted_priority = encrypt_data(priority, key)?;
+    let created_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
 
     conn.execute(
-        "INSERT INTO notes (note, priority) VALUES (?1, ?2)",
-        params![encrypted_note, encrypted_priority],
+        "INSERT INTO notes (note, priority, createdAt) VALUES (?1, ?2, ?3)",
+        params![encrypted_note, encrypted_priority, created_at],
     ).context("Failed to insert note")?;
     println!("Catatan berhasil ditambahkan!");
     Ok(())
 }
 
-// Tampilkan semua catatan
+// Tampilkan semua catatan (tanpa createdAt dan modifiedAt)
 fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, note, priority FROM notes ORDER BY CASE priority 
@@ -112,6 +118,8 @@ fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
                 id: row.get(0).context("Failed to get id from row")?,
                 note,
                 priority,
+                created_at: Utc::now(), // Nilai dummy
+                modified_at: None, // Nilai dummy
             })
         }
     ).context("Failed to query notes")?;
@@ -122,7 +130,7 @@ fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
 
     for note in note_iter {
         let note = note?;
-        let wrapped_note = wrap(&note.note, 60); // Perbaiki ¬e.note menjadi &note.note
+        let wrapped_note = wrap(&note.note, 60); // Perbaiki ¬e menjadi &note
         for (i, line) in wrapped_note.iter().enumerate() {
             if i == 0 {
                 println!("| {:<4} | {:<60} | {:<10} |", note.id, line, note.priority);
@@ -148,7 +156,7 @@ fn delete_note(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Edit catatan berdasarkan ID (dengan opsi untuk meminta ID atau langsung pakai ID)
+// Edit catatan berdasarkan ID
 fn edit_note(conn: &Connection, key: &Key<Aes256Gcm>, provided_id: Option<i32>) -> anyhow::Result<()> {
     let id = match provided_id {
         Some(id) => id,
@@ -181,24 +189,26 @@ fn edit_note(conn: &Connection, key: &Key<Aes256Gcm>, provided_id: Option<i32>) 
         }
     };
 
+    let modified_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
+
     if !note.is_empty() && priority.is_some() {
         let encrypted_note = encrypt_data(note, key)?;
         let encrypted_priority = encrypt_data(priority.unwrap(), key)?;
         conn.execute(
-            "UPDATE notes SET note = ?1, priority = ?2 WHERE id = ?3",
-            params![encrypted_note, encrypted_priority, id],
+            "UPDATE notes SET note = ?1, priority = ?2, modifiedAt = ?3 WHERE id = ?4",
+            params![encrypted_note, encrypted_priority, modified_at, id],
         ).context("Failed to update note and priority")?;
     } else if !note.is_empty() {
         let encrypted_note = encrypt_data(note, key)?;
         conn.execute(
-            "UPDATE notes SET note = ?1 WHERE id = ?2",
-            params![encrypted_note, id],
+            "UPDATE notes SET note = ?1, modifiedAt = ?2 WHERE id = ?3",
+            params![encrypted_note, modified_at, id],
         ).context("Failed to update note")?;
     } else if let Some(p) = priority {
         let encrypted_priority = encrypt_data(p, key)?;
         conn.execute(
-            "UPDATE notes SET priority = ?1 WHERE id = ?2",
-            params![encrypted_priority, id],
+            "UPDATE notes SET priority = ?1, modifiedAt = ?2 WHERE id = ?3",
+            params![encrypted_priority, modified_at, id],
         ).context("Failed to update priority")?;
     } else {
         println!("Tidak ada perubahan yang dibuat.");
@@ -226,9 +236,10 @@ fn change_priority(conn: &Connection, key: &Key<Aes256Gcm>, id: i32) -> anyhow::
     };
 
     let encrypted_priority = encrypt_data(priority, key)?;
+    let modified_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
     conn.execute(
-        "UPDATE notes SET priority = ?1 WHERE id = ?2",
-        params![encrypted_priority, id],
+        "UPDATE notes SET priority = ?1, modifiedAt = ?2 WHERE id = ?3",
+        params![encrypted_priority, modified_at, id],
     ).context("Failed to change priority")?;
     println!("Prioritas catatan dengan ID {} berhasil diperbarui!", id);
     Ok(())
@@ -241,7 +252,7 @@ fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()
     io::stdin().read_line(&mut id)?;
     let id: i32 = id.trim().parse().unwrap_or(0);
 
-    let mut stmt = conn.prepare("SELECT id, note, priority FROM notes WHERE id = ?1")
+    let mut stmt = conn.prepare("SELECT id, note, priority, createdAt, modifiedAt FROM notes WHERE id = ?1")
         .context("Failed to prepare statement")?;
     let mut note_iter = stmt.query_and_then(
         params![id],
@@ -254,10 +265,24 @@ fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()
                 .context("Failed to decrypt note")?;
             let priority = decrypt_data(&encrypted_priority, key)
                 .context("Failed to decrypt priority")?;
+            let created_at_str: String = row.get(3)
+                .context("Failed to get createdAt from row")?;
+            let modified_at_str: Option<String> = row.get(4)
+                .context("Failed to get modifiedAt from row")?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .context("Failed to parse createdAt")?;
+            let modified_at = modified_at_str.map(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .context("Failed to parse modifiedAt")
+            }).transpose()?;
             Ok(Note {
                 id: row.get(0).context("Failed to get id from row")?,
                 note,
                 priority,
+                created_at,
+                modified_at,
             })
         }
     ).context("Failed to query note by ID")?;
@@ -265,9 +290,13 @@ fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()
     if let Some(note) = note_iter.next() {
         let note = note?;
         println!("\nDetail Catatan:");
-        println!("ID       : {}", note.id);
-        println!("Catatan  : {}", note.note);
-        println!("Prioritas: {}", note.priority);
+        println!("ID         : {}", note.id);
+        println!("Catatan    : {}", note.note);
+        println!("Prioritas  : {}", note.priority);
+        println!("Dibuat     : {}", note.created_at.to_rfc3339());
+        if let Some(modified_at) = note.modified_at {
+            println!("Diperbarui : {}", modified_at.to_rfc3339());
+        }
         println!("\nMenu:");
         println!("1. Edit Catatan");
         println!("2. Hapus Catatan");
@@ -280,7 +309,7 @@ fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()
         let choice: i32 = choice.trim().parse().unwrap_or(0);
 
         match choice {
-            1 => edit_note(conn, key, Some(note.id))?, // Gunakan ID dari catatan yang dilihat
+            1 => edit_note(conn, key, Some(note.id))?,
             2 => delete_note(conn)?,
             3 => change_priority(conn, key, note.id)?,
             4 => println!("Kembali ke menu utama."),
@@ -332,7 +361,7 @@ fn main() -> anyhow::Result<()> {
             1 => add_note(&conn, key)?,
             2 => show_notes(&conn, key)?,
             3 => delete_note(&conn)?,
-            4 => edit_note(&conn, key, None)?, // Di menu utama, minta ID
+            4 => edit_note(&conn, key, None)?,
             5 => refresh_data(&conn, key)?,
             6 => view_note_by_id(&conn, key)?,
             7 => {
