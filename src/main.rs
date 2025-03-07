@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, params};
 use textwrap::wrap;
 use std::io;
 use aes_gcm::{

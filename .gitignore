@@ -1,1 +1,45 @@
-/target
+# Compiled binaries and executables
+/target/
+
+# Dependency lock file - consider if you want to track this or not
+Cargo.lock
+
+# Build artifacts
+/Cargo.lock
+/debug/
+/release/
+out/
+
+# Coverage data
+/coverage/
+*.profraw
+
+# Rust test artifacts
+*.rs.bk
+
+# Documentation
+/doc/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.#*
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+/.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Env file (this is IMPORTANT for security)
+.env
+
+# Custom or Project-Specific Ignore
+my_secret_key.txt
+
