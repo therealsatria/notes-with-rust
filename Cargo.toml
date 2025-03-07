@@ -11,6 +11,7 @@ hex = "0.4.3"  # Untuk mengkonversi kunci dari string hex jika diperlukan
 dotenv = "0.15.0"
 anyhow = "1.0"
 chrono = "0.4"
+csv = "1.1"
 
 [profile.release]
 opt-level = 3  # Maksimalkan optimasi

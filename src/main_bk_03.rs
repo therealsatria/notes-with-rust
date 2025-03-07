@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params}; // Hapus 'batch'
+use rusqlite::{Connection, params};
 use textwrap::wrap;
 use std::io;
 use aes_gcm::{
@@ -9,8 +9,6 @@ use dotenv::dotenv;
 use std::env;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use csv::{ReaderBuilder, WriterBuilder};
-use std::fs::File;
 
 // Struktur untuk merepresentasikan catatan
 struct Note {
@@ -24,7 +22,7 @@ struct Note {
 // Fungsi untuk enkripsi data
 fn encrypt_data(data: &str, key: &Key<Aes256Gcm>) -> anyhow::Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Nonce acak 12 byte
     let ciphertext = cipher.encrypt(&nonce, data.as_bytes())
         .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
     let mut encrypted = nonce.to_vec();
@@ -35,7 +33,7 @@ fn encrypt_data(data: &str, key: &Key<Aes256Gcm>) -> anyhow::Result<Vec<u8>> {
 // Fungsi untuk dekripsi data
 fn decrypt_data(encrypted: &[u8], key: &Key<Aes256Gcm>) -> anyhow::Result<String> {
     let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&encrypted[0..12]);
+    let nonce = Nonce::from_slice(&encrypted[0..12]); // Ambil 12 byte pertama sebagai nonce
     let ciphertext = &encrypted[12..];
     let plaintext = cipher.decrypt(nonce, ciphertext)
         .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
@@ -84,7 +82,7 @@ fn add_note(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
 
     let encrypted_note = encrypt_data(note, key)?;
     let encrypted_priority = encrypt_data(priority, key)?;
-    let created_at = Utc::now().to_rfc3339();
+    let created_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
 
     conn.execute(
         "INSERT INTO notes (note, priority, createdAt) VALUES (?1, ?2, ?3)",
@@ -94,7 +92,7 @@ fn add_note(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Tampilkan semua catatan
+// Tampilkan semua catatan (tanpa createdAt dan modifiedAt)
 fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, note, priority FROM notes ORDER BY CASE priority 
@@ -120,8 +118,8 @@ fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
                 id: row.get(0).context("Failed to get id from row")?,
                 note,
                 priority,
-                created_at: Utc::now(), // Dummy
-                modified_at: None, // Dummy
+                created_at: Utc::now(), // Nilai dummy
+                modified_at: None, // Nilai dummy
             })
         }
     ).context("Failed to query notes")?;
@@ -132,9 +130,7 @@ fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
 
     for note in note_iter {
         let note = note?;
-        let wrapped_note = wrap(&note
-
-            .note, 60);
+        let wrapped_note = wrap(&note.note, 60); // Perbaiki ¬e menjadi &note
         for (i, line) in wrapped_note.iter().enumerate() {
             if i == 0 {
                 println!("| {:<4} | {:<60} | {:<10} |", note.id, line, note.priority);
@@ -193,7 +189,7 @@ fn edit_note(conn: &Connection, key: &Key<Aes256Gcm>, provided_id: Option<i32>) 
         }
     };
 
-    let modified_at = Utc::now().to_rfc3339();
+    let modified_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
 
     if !note.is_empty() && priority.is_some() {
         let encrypted_note = encrypt_data(note, key)?;
@@ -240,7 +236,7 @@ fn change_priority(conn: &Connection, key: &Key<Aes256Gcm>, id: i32) -> anyhow::
     };
 
     let encrypted_priority = encrypt_data(priority, key)?;
-    let modified_at = Utc::now().to_rfc3339();
+    let modified_at = Utc::now().to_rfc3339(); // Konversi ke string RFC 3339
     conn.execute(
         "UPDATE notes SET priority = ?1, modifiedAt = ?2 WHERE id = ?3",
         params![encrypted_priority, modified_at, id],
@@ -332,116 +328,9 @@ fn refresh_data(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Export semua data ke CSV (unencrypted)
-fn export_to_csv(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
-    let mut stmt = conn.prepare("SELECT id, note, priority, createdAt, modifiedAt FROM notes")
-        .context("Failed to prepare statement")?;
-    let note_iter = stmt.query_and_then(
-        [],
-        |row| -> anyhow::Result<Note> {
-            let encrypted_note: Vec<u8> = row.get(1)?;
-            let encrypted_priority: Vec<u8> = row.get(2)?;
-            let note = decrypt_data(&encrypted_note, key)?;
-            let priority = decrypt_data(&encrypted_priority, key)?;
-            let created_at_str: String = row.get(3)?;
-            let modified_at_str: Option<String> = row.get(4)?;
-            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map(|dt| dt.with_timezone(&Utc))?;
-            let modified_at = modified_at_str.map(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .map(|dt| dt.with_timezone(&Utc))
-            }).transpose()?;
-            Ok(Note {
-                id: row.get(0)?,
-                note,
-                priority,
-                created_at,
-                modified_at,
-            })
-        }
-    ).context("Failed to query notes for export")?;
-
-    let file = File::create("notes_export.csv").context("Failed to create CSV file")?;
-    let mut wtr = WriterBuilder::new().from_writer(file);
-
-    wtr.write_record(&["id", "note", "priority", "createdAt", "modifiedAt"])
-        .context("Failed to write CSV header")?;
-
-    for note in note_iter {
-        let note = note?;
-        wtr.write_record(&[
-            note.id.to_string(),
-            note.note,
-            note.priority,
-            note.created_at.to_rfc3339(),
-            note.modified_at.map_or(String::new(), |dt| dt.to_rfc3339()),
-        ]).context("Failed to write CSV record")?;
-    }
-
-    wtr.flush().context("Failed to flush CSV writer")?;
-    println!("Data berhasil diekspor ke 'notes_export.csv'!");
-    Ok(())
-}
-
-// Import data dari CSV (encrypt sebelum simpan)
-fn import_from_csv(conn: &mut Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> { // Ubah ke &mut Connection
-    println!("Masukkan path file CSV untuk diimpor (default: 'notes_import.csv'): ");
-    let mut path = String::new();
-    io::stdin().read_line(&mut path)?;
-    let path = path.trim();
-    let path = if path.is_empty() { "notes_import.csv" } else { path };
-
-    let file = File::open(path).context("Failed to open CSV file")?;
-    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
-
-    let mut records = Vec::new();
-    for result in rdr.records() {
-        let record = result.context("Failed to read CSV record")?;
-        let id: i32 = record.get(0).unwrap_or("0").parse().unwrap_or(0);
-        let note = record.get(1).unwrap_or("").to_string();
-        let priority = record.get(2).unwrap_or("Sedang").to_string();
-        let created_at = record.get(3)
-            .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
-            .unwrap_or_else(|| Ok(Utc::now()))
-            .context("Failed to parse createdAt from CSV")?;
-        let modified_at = record.get(4)
-            .filter(|s| !s.is_empty())
-            .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
-            .transpose()
-            .context("Failed to parse modifiedAt from CSV")?;
-
-        let encrypted_note = encrypt_data(&note
-
-            , key)?;
-        let encrypted_priority = encrypt_data(&priority, key)?;
-
-        records.push((id, encrypted_note, encrypted_priority, created_at.to_rfc3339(), modified_at.map(|dt| dt.to_rfc3339())));
-    }
-
-    let tx = conn.transaction().context("Failed to start transaction")?;
-    tx.execute("DELETE FROM notes", []).context("Failed to clear table before import")?;
-    for (id, note, priority, created_at, modified_at) in records {
-        if id == 0 {
-            tx.execute(
-                "INSERT INTO notes (note, priority, createdAt, modifiedAt) VALUES (?1, ?2, ?3, ?4)",
-                params![note, priority, created_at, modified_at],
-            ).context("Failed to insert note during import")?;
-        } else {
-            tx.execute(
-                "INSERT INTO notes (id, note, priority, createdAt, modifiedAt) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, note, priority, created_at, modified_at],
-            ).context("Failed to insert note with ID during import")?;
-        }
-    }
-    tx.commit().context("Failed to commit transaction")?;
-
-    println!("Data berhasil diimpor dari '{}'", path);
-    Ok(())
-}
-
 // Fungsi utama
 fn main() -> anyhow::Result<()> {
-    dotenv().ok();
+    dotenv().ok(); // Muat file .env, abaikan jika tidak ada
 
     let encryption_key = env::var("ENCRYPTION_KEY")
         .context("ENCRYPTION_KEY harus diset di file .env")?;
@@ -450,7 +339,7 @@ fn main() -> anyhow::Result<()> {
     }
     let key = Key::<Aes256Gcm>::from_slice(encryption_key.as_bytes());
 
-    let mut conn = init_db()?; // Ubah ke mut karena import_from_csv memerlukan &mut Connection
+    let conn = init_db()?;
 
     loop {
         show_notes(&conn, key)?;
@@ -461,10 +350,8 @@ fn main() -> anyhow::Result<()> {
         println!("4. Edit Catatan");
         println!("5. Refresh Data");
         println!("6. Lihat Catatan Berdasarkan ID");
-        println!("7. Export ke CSV");
-        println!("8. Import dari CSV");
-        println!("9. Keluar");
-        println!("Pilih opsi (1-9): ");
+        println!("7. Keluar");
+        println!("Pilih opsi (1-7): ");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
@@ -477,9 +364,7 @@ fn main() -> anyhow::Result<()> {
             4 => edit_note(&conn, key, None)?,
             5 => refresh_data(&conn, key)?,
             6 => view_note_by_id(&conn, key)?,
-            7 => export_to_csv(&conn, key)?,
-            8 => import_from_csv(&mut conn, key)?, // Gunakan &mut conn
-            9 => {
+            7 => {
                 println!("Keluar dari aplikasi.");
                 break;
             }
