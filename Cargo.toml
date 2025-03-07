@@ -1,0 +1,14 @@
+[package]
+name = "notes_app_rust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rusqlite = { version = "0.34.0", features = ["bundled"] }
+textwrap = "0.16.2"
+
+[profile.release]
+opt-level = 3  # Maksimalkan optimasi
+lto = true     # Aktifkan Link-Time Optimization
+codegen-units = 1  # Kurangi paralelisme untuk optimasi lebih baik
+
