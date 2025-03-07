@@ -6,6 +6,10 @@ edition = "2024"
 [dependencies]
 rusqlite = { version = "0.34.0", features = ["bundled"] }
 textwrap = "0.16.2"
+aes-gcm = "0.10.3"
+hex = "0.4.3"  # Untuk mengkonversi kunci dari string hex jika diperlukan
+dotenv = "0.15.0"
+anyhow = "1.0"
 
 [profile.release]
 opt-level = 3  # Maksimalkan optimasi
