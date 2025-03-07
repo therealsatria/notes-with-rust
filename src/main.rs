@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params}; // Tambah params untuk parameter SQL
 use textwrap::wrap;
 use std::io;
 use aes_gcm::{
@@ -80,33 +80,37 @@ fn add_note(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
 
     conn.execute(
         "INSERT INTO notes (note, priority) VALUES (?1, ?2)",
-        [&encrypted_note, &encrypted_priority],
+        params![encrypted_note, encrypted_priority],
     ).context("Failed to insert note")?;
     println!("Catatan berhasil ditambahkan!");
     Ok(())
 }
 
 // Tampilkan semua catatan
-// Tampilkan semua catatan
 fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, note, priority FROM notes ORDER BY CASE priority 
          WHEN ?1 THEN 1 WHEN ?2 THEN 2 WHEN ?3 THEN 3 END"
     ).context("Failed to prepare statement")?;
-
+    
     let encrypted_tinggi = encrypt_data("Tinggi", key)?;
     let encrypted_sedang = encrypt_data("Sedang", key)?;
     let encrypted_rendah = encrypt_data("Rendah", key)?;
 
-    let note_iter = stmt.query_map(
-        [&encrypted_tinggi, &encrypted_sedang, &encrypted_rendah],
-        |row| {
-            let id: i32 = row.get(0)?;
+    let note_iter = stmt.query_and_then(
+        params![encrypted_tinggi, encrypted_sedang, encrypted_rendah],
+        |row| -> Result<Note, rusqlite::Error> {
             let encrypted_note: Vec<u8> = row.get(1)?;
             let encrypted_priority: Vec<u8> = row.get(2)?;
-
-            // Return the raw data from the query_map closure
-            Ok((id, encrypted_note, encrypted_priority))
+            let note = decrypt_data(&encrypted_note, key)
+                .map_err(|_| rusqlite::Error::InvalidParameterName("Failed to decrypt note".into()))?;
+            let priority = decrypt_data(&encrypted_priority, key)
+                .map_err(|_| rusqlite::Error::InvalidParameterName("Failed to decrypt priority".into()))?;
+            Ok(Note {
+                id: row.get(0)?,
+                note,
+                priority,
+            })
         }
     ).context("Failed to query notes")?;
 
@@ -114,16 +118,9 @@ fn show_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     println!("| {:<4} | {:<60} | {:<10} |", "ID", "Note", "Priority");
     println!("|------|--------------------------------------------------------------|------------|");
 
-    for result in note_iter {
-        // Handle the result from query_map
-        let (id, encrypted_note, encrypted_priority) = result?;
-
-        // Now decrypt the data outside the closure
-        let note = decrypt_data(&encrypted_note, key)?;
-        let priority = decrypt_data(&encrypted_priority, key)?;
-
-        let note = Note { id, note, priority };
-        let wrapped_note = wrap(&note.note, 60);
+    for note in note_iter {
+        let note = note?;
+        let wrapped_note = wrap(&note.note, 60); // Perbaiki ¬e.note menjadi &note.note
         for (i, line) in wrapped_note.iter().enumerate() {
             if i == 0 {
                 println!("| {:<4} | {:<60} | {:<10} |", note.id, line, note.priority);
@@ -143,7 +140,7 @@ fn delete_note(conn: &Connection) -> anyhow::Result<()> {
     io::stdin().read_line(&mut id)?;
     let id: i32 = id.trim().parse().unwrap_or(0);
 
-    conn.execute("DELETE FROM notes WHERE id = ?1", [&id])
+    conn.execute("DELETE FROM notes WHERE id = ?1", params![id])
         .context("Failed to delete note")?;
     println!("Catatan dengan ID {} berhasil dihapus!", id);
     Ok(())
@@ -204,6 +201,86 @@ fn edit_note(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Ganti prioritas catatan berdasarkan ID
+fn change_priority(conn: &Connection, key: &Key<Aes256Gcm>, id: i32) -> anyhow::Result<()> {
+    println!("Masukkan prioritas baru (1: Tinggi, 2: Sedang, 3: Rendah): ");
+    let mut prio_choice = String::new();
+    io::stdin().read_line(&mut prio_choice)?;
+    let prio_choice: i32 = prio_choice.trim().parse().unwrap_or(0);
+
+    let priority = match prio_choice {
+        1 => "Tinggi",
+        2 => "Sedang",
+        3 => "Rendah",
+        _ => {
+            println!("Pilihan tidak valid, prioritas tidak diubah.");
+            return Ok(());
+        }
+    };
+
+    let encrypted_priority = encrypt_data(priority, key)?;
+    conn.execute(
+        "UPDATE notes SET priority = ?1 WHERE id = ?2",
+        params![encrypted_priority, id],
+    ).context("Failed to change priority")?;
+    println!("Prioritas catatan dengan ID {} berhasil diperbarui!", id);
+    Ok(())
+}
+
+// Tampilan halaman khusus untuk melihat note berdasarkan ID
+fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
+    println!("Masukkan ID catatan yang ingin dilihat: ");
+    let mut id = String::new();
+    io::stdin().read_line(&mut id)?;
+    let id: i32 = id.trim().parse().unwrap_or(0);
+
+    let mut stmt = conn.prepare("SELECT id, note, priority FROM notes WHERE id = ?1")
+        .context("Failed to prepare statement")?;
+    let mut note_iter = stmt.query_and_then(params![id], |row| -> rusqlite::Result<Note> {
+        let id = row.get(0)?;
+        let encrypted_note: Vec<u8> = row.get(1)?;
+        let encrypted_priority: Vec<u8> = row.get(2)?;
+        let note = decrypt_data(&encrypted_note, key)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let priority = decrypt_data(&encrypted_priority, key)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        Ok(Note {
+            id,
+            note,
+            priority,
+        })
+    }).context("Failed to query note by ID")?;
+
+    if let Some(note) = note_iter.next() {
+        let note = note?;
+        println!("\nDetail Catatan:");
+        println!("ID       : {}", note.id);
+        println!("Catatan  : {}", note.note);
+        println!("Prioritas: {}", note.priority);
+        println!("\nMenu:");
+        println!("1. Edit Catatan");
+        println!("2. Hapus Catatan");
+        println!("3. Ganti Prioritas");
+        println!("4. Kembali ke Menu Utama");
+        println!("Pilih opsi (1-4): ");
+
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice: i32 = choice.trim().parse().unwrap_or(0);
+
+        match choice {
+            1 => edit_note(conn, key)?,
+            2 => delete_note(conn)?,
+            3 => change_priority(conn, key, id)?,
+            4 => println!("Kembali ke menu utama."),
+            _ => println!("Pilihan tidak valid!"),
+        }
+    } else {
+        println!("Catatan dengan ID {} tidak ditemukan!", id);
+    }
+    Ok(())
+}
+
 // Refresh data
 fn refresh_data(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
     show_notes(conn, key)?;
@@ -216,7 +293,7 @@ fn main() -> anyhow::Result<()> {
     dotenv().ok(); // Muat file .env, abaikan jika tidak ada
 
     let encryption_key = env::var("ENCRYPTION_KEY")
-        .context("EN kamu harus mengatur ENCRYPTION_KEY di file .env")?;
+        .context("ENCRYPTION_KEY harus diset di file .env")?;
     if encryption_key.len() != 32 {
         anyhow::bail!("ENCRYPTION_KEY harus tepat 32 byte untuk AES-256-GCM");
     }
@@ -232,8 +309,9 @@ fn main() -> anyhow::Result<()> {
         println!("3. Hapus Catatan");
         println!("4. Edit Catatan");
         println!("5. Refresh Data");
-        println!("6. Keluar");
-        println!("Pilih opsi (1-6): ");
+        println!("6. Lihat Catatan Berdasarkan ID");
+        println!("7. Keluar");
+        println!("Pilih opsi (1-7): ");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
@@ -245,7 +323,8 @@ fn main() -> anyhow::Result<()> {
             3 => delete_note(&conn)?,
             4 => edit_note(&conn, key)?,
             5 => refresh_data(&conn, key)?,
-            6 => {
+            6 => view_note_by_id(&conn, key)?,
+            7 => {
                 println!("Keluar dari aplikasi.");
                 break;
             }
