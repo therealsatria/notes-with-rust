@@ -3,7 +3,7 @@ use aes_gcm::{Aes256Gcm, Key};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use crate::functions::utils::{Note, decrypt_data};
-use crate::functions::edit_note::edit_note;
+use crate::functions::edit_note::edit_note; // Hanya impor edit_note
 use crate::functions::delete_note::delete_note;
 
 pub fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
@@ -53,9 +53,9 @@ pub fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Resul
         println!("ID         : {}", note.id);
         println!("Catatan    : {}", note.note);
         println!("Prioritas  : {}", note.priority);
-        println!("Dibuat     : {}", note.created_at.to_rfc3339());
+        println!("Dibuat     : {}", note.created_at.format("%Y-%m-%d %H:%M:%S"));
         if let Some(modified_at) = note.modified_at {
-            println!("Diperbarui : {}", modified_at.to_rfc3339());
+            println!("Diperbarui : {}", modified_at.format("%Y-%m-%d %H:%M:%S"));
         }
         println!("\nMenu:");
         println!("1. Edit Catatan");
@@ -81,7 +81,6 @@ pub fn view_note_by_id(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Resul
     Ok(())
 }
 
-// Fungsi bantu untuk ganti prioritas (digunakan dalam view_note_by_id)
 pub fn change_priority(conn: &Connection, key: &Key<Aes256Gcm>, id: i32) -> anyhow::Result<()> {
     println!("Masukkan prioritas baru (1: Tinggi, 2: Sedang, 3: Rendah): ");
     let mut prio_choice = String::new();
@@ -99,7 +98,7 @@ pub fn change_priority(conn: &Connection, key: &Key<Aes256Gcm>, id: i32) -> anyh
     };
 
     let encrypted_priority = crate::functions::utils::encrypt_data(priority, key)?;
-    let modified_at = chrono::Utc::now().to_rfc3339();
+    let modified_at = chrono::Utc::now().to_rfc3339(); // Gunakan RFC 3339
     conn.execute(
         "UPDATE notes SET priority = ?1, modifiedAt = ?2 WHERE id = ?3",
         params![encrypted_priority, modified_at, id],

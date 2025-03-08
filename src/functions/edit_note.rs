@@ -36,6 +36,7 @@ pub fn edit_note(conn: &Connection, key: &Key<Aes256Gcm>, provided_id: Option<i3
         }
     };
 
+    // Format datetime tanpa nanodetik
     let modified_at = Utc::now().to_rfc3339();
 
     if !note.is_empty() && priority.is_some() {

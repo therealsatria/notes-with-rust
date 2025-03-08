@@ -3,7 +3,6 @@ use dotenv::dotenv;
 use std::env;
 
 // Deklarasi modul
-
 mod functions {
     pub mod add_note;
     pub mod delete_note;
@@ -16,6 +15,7 @@ mod functions {
     pub mod show_notes;
     pub mod utils;
     pub mod view_note_by_id;
+    pub mod show_all_notes;
 }
 
 // Impor fungsi dari modul
@@ -29,10 +29,10 @@ use functions::refresh_data::refresh_data;
 use functions::search_notes::search_notes;
 use functions::show_notes::show_notes;
 use functions::view_note_by_id::view_note_by_id;
+use functions::show_all_notes::show_all_notes;
 
 fn main() -> anyhow::Result<()> {
     dotenv().ok();
-
     let encryption_key = env::var("ENCRYPTION_KEY")
         .context("ENCRYPTION_KEY harus diset di file .env")?;
     if encryption_key.len() != 32 {
@@ -43,9 +43,10 @@ fn main() -> anyhow::Result<()> {
     let mut conn = init_db()?;
 
     loop {
+        show_notes(&conn, key)?;
         println!("\nSimple Notes App");
         println!("1. Tambah Catatan");
-        println!("2. Tampilkan Catatan");
+        println!("2. Tampilkan Catatan (Dengan Limit)");
         println!("3. Hapus Catatan");
         println!("4. Edit Catatan");
         println!("5. Refresh Data");
@@ -53,8 +54,9 @@ fn main() -> anyhow::Result<()> {
         println!("7. Export ke CSV");
         println!("8. Import dari CSV");
         println!("9. Search Catatan");
-        println!("10. Keluar");
-        println!("Pilih opsi (1-10): ");
+        println!("10. Tampilkan Semua Catatan"); // Tambahkan ini
+        println!("0. Keluar"); // Perbarui nomor opsi
+        println!("Pilih opsi (1-11): ");
 
         let mut choice = String::new();
         std::io::stdin().read_line(&mut choice)?;
@@ -70,7 +72,8 @@ fn main() -> anyhow::Result<()> {
             7 => export_to_csv(&conn, key)?,
             8 => import_from_csv(&mut conn, key)?,
             9 => search_notes(&conn, key)?,
-            10 => {
+            10 => show_all_notes(&conn, key)?, // Tambahkan ini
+            0 => {
                 println!("Keluar dari aplikasi.");
                 break;
             }
