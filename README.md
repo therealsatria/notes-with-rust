@@ -24,6 +24,8 @@ openssl rand -base64 32 > .env
 
 ## contoh isi file .env
 ENCRYPTION_KEY=Z2VuZXJhdGVkLWtleS1mb3Itc2VjdXJpdHktZXhhbXBsZQ==
+SHOW_LIMIT=10
+SHOW_ORDER_BY=modifiedAt
 
 ## untuk mengamankan 
 chmod 600 .env
