@@ -15,3 +15,28 @@ cargo build --release --target x86_64-unknown-linux-gnu
 
 ldd target/x86_64-pc-windows-gnu/release/notes_app_rust
 ldd target/x86_64-unknown-linux-gnu/release/notes_app_rust
+
+## Key Generation
+openssl rand -base64 32
+
+## sekaligus copy value kedalam file .env
+openssl rand -base64 32 > .env
+
+## contoh isi file .env
+ENCRYPTION_KEY=Z2VuZXJhdGVkLWtleS1mb3Itc2VjdXJpdHktZXhhbXBsZQ==
+SHOW_LIMIT=10
+SHOW_ORDER_BY=modifiedAt
+
+## untuk mengamankan 
+chmod 600 .env
+
+## build standard:
+cargo build --release
+
+cp target/release/notes_app_rust /path/to/target/
+cp .env /path/to/target/
+cd /path/to/target/
+./notes_app_rust
+
+
+
