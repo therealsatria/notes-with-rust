@@ -2,8 +2,7 @@ use rusqlite::{Connection, params}; // Hapus 'batch'
 use textwrap::wrap;
 use std::io;
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
+    Aes256Gcm, Key
 };
 use dotenv::dotenv;
 use std::env;
@@ -11,6 +10,9 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use csv::{ReaderBuilder, WriterBuilder};
 use std::fs::File;
+mod cipher;
+use cipher::encrypt_data;
+use cipher::decrypt_data;
 
 // Struktur untuk merepresentasikan catatan
 struct Note {
@@ -19,28 +21,6 @@ struct Note {
     priority: String,
     created_at: DateTime<Utc>,
     modified_at: Option<DateTime<Utc>>,
-}
-
-// Fungsi untuk enkripsi data
-fn encrypt_data(data: &str, key: &Key<Aes256Gcm>) -> anyhow::Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher.encrypt(&nonce, data.as_bytes())
-        .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
-    let mut encrypted = nonce.to_vec();
-    encrypted.extend_from_slice(&ciphertext);
-    Ok(encrypted)
-}
-
-// Fungsi untuk dekripsi data
-fn decrypt_data(encrypted: &[u8], key: &Key<Aes256Gcm>) -> anyhow::Result<String> {
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&encrypted[0..12]);
-    let ciphertext = &encrypted[12..];
-    let plaintext = cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-    String::from_utf8(plaintext)
-        .map_err(|e| anyhow::anyhow!("UTF-8 conversion failed: {:?}", e))
 }
 
 // Inisialisasi database
@@ -439,6 +419,65 @@ fn import_from_csv(conn: &mut Connection, key: &Key<Aes256Gcm>) -> anyhow::Resul
     Ok(())
 }
 
+// Pencarian catatan berdasarkan note
+fn search_notes(conn: &Connection, key: &Key<Aes256Gcm>) -> anyhow::Result<()> {
+    println!("Masukkan kata kunci untuk mencari catatan: ");
+    let mut keyword = String::new();
+    io::stdin().read_line(&mut keyword)?;
+    let keyword = keyword.trim();
+
+    let mut stmt = conn.prepare("SELECT id, note, priority FROM notes")
+        .context("Failed to prepare statement")?;
+
+    let note_iter = stmt.query_and_then(
+        [],
+        |row| -> anyhow::Result<Note> {
+            let encrypted_note: Vec<u8> = row.get(1)
+                .context("Failed to get note from row")?;
+            let encrypted_priority: Vec<u8> = row.get(2)
+                .context("Failed to get priority from row")?;
+            let note = decrypt_data(&encrypted_note, key)
+                .context("Failed to decrypt note")?;
+            let priority = decrypt_data(&encrypted_priority, key)
+                .context("Failed to decrypt priority")?;
+            Ok(Note {
+                id: row.get(0).context("Failed to get id from row")?,
+                note,
+                priority,
+                created_at: Utc::now(), // Dummy
+                modified_at: None, // Dummy
+            })
+        }
+    ).context("Failed to query notes")?;
+
+    let mut found = false;
+    println!("\nHasil Pencarian untuk '{}':", keyword);
+    println!("| {:<4} | {:<60} | {:<10} |", "ID", "Note", "Priority");
+    println!("|------|--------------------------------------------------------------|------------|");
+
+    for note in note_iter {
+        let note = note?;
+        if note.note.to_lowercase().contains(&keyword.to_lowercase()) {
+            found = true;
+            let wrapped_note = wrap(&note.note, 60);
+            for (i, line) in wrapped_note.iter().enumerate() {
+                if i == 0 {
+                    println!("| {:<4} | {:<60} | {:<10} |", note.id, line, note.priority);
+                } else {
+                    println!("| {:<4} | {:<60} | {:<10} |", "", line, "");
+                }
+            }
+            println!("|------|--------------------------------------------------------------|------------|");
+        }
+    }
+    if !found {
+        println!("Tidak ada catatan yang cocok dengan kata kunci '{}'.", keyword);
+    }
+    Ok(())
+}
+
+
+//wrap(&note.note, 60);
 // Fungsi utama
 fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -450,10 +489,10 @@ fn main() -> anyhow::Result<()> {
     }
     let key = Key::<Aes256Gcm>::from_slice(encryption_key.as_bytes());
 
-    let mut conn = init_db()?; // Ubah ke mut karena import_from_csv memerlukan &mut Connection
+    let mut conn = init_db()?;
 
     loop {
-        show_notes(&conn, key)?;
+        //show_notes(&conn, key)?;
         println!("\nSimple Notes App");
         println!("1. Tambah Catatan");
         println!("2. Tampilkan Catatan");
@@ -463,8 +502,9 @@ fn main() -> anyhow::Result<()> {
         println!("6. Lihat Catatan Berdasarkan ID");
         println!("7. Export ke CSV");
         println!("8. Import dari CSV");
-        println!("9. Keluar");
-        println!("Pilih opsi (1-9): ");
+        println!("9. Search Catatan"); // Tambah opsi baru
+        println!("10. Keluar");
+        println!("Pilih opsi (1-10): ");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
@@ -478,8 +518,9 @@ fn main() -> anyhow::Result<()> {
             5 => refresh_data(&conn, key)?,
             6 => view_note_by_id(&conn, key)?,
             7 => export_to_csv(&conn, key)?,
-            8 => import_from_csv(&mut conn, key)?, // Gunakan &mut conn
-            9 => {
+            8 => import_from_csv(&mut conn, key)?,
+            9 => search_notes(&conn, key)?, // Panggil fungsi pencarian
+            10 => {
                 println!("Keluar dari aplikasi.");
                 break;
             }
