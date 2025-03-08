@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
         println!("9. Search Catatan");
         println!("10. Tampilkan Semua Catatan"); // Tambahkan ini
         println!("0. Keluar"); // Perbarui nomor opsi
-        println!("Pilih opsi (1-11): ");
+        println!("Pilih opsi (0-10): ");
 
         let mut choice = String::new();
         std::io::stdin().read_line(&mut choice)?;
